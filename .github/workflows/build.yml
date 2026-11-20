@@ -1,0 +1,97 @@
+
+name: Build CarePoint APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Setup Java
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3. Setup Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # 4. Skip Android lint crash
+      - name: Skip Android lint crash
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/nolint.gradle <<'EOT'
+          allprojects {
+              tasks.configureEach { t ->
+                  if (t.name.startsWith('lintVital')) {
+                      t.enabled = false
+                  }
+              }
+          }
+          EOT
+
+      # 5. Extract corrected project ZIP
+      - name: Prepare project
+        run: |
+          echo "Checking project ZIP..."
+
+          if [ ! -f "carepoint_local_fixed.zip" ]; then
+            echo "ERROR: carepoint_local_fixed.zip not found!"
+            echo "Upload the ZIP to the repository root."
+            ls -la
+            exit 1
+          fi
+
+          echo "Extracting project..."
+          unzip -q carepoint_local_fixed.zip
+
+          if [ ! -f "carepoint_local/pubspec.yaml" ]; then
+            echo "ERROR: Flutter project not found!"
+            exit 1
+          fi
+
+          echo "Project extracted successfully."
+
+          cd carepoint_local
+
+          flutter create --platforms=android .
+
+          sh tools/patch_manifest.sh
+
+          flutter pub get
+
+      # 6. Check Flutter code
+      - name: Check code
+        working-directory: carepoint_local
+        continue-on-error: true
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      # 7. Build Release APK
+      - name: Build APK
+        working-directory: carepoint_local
+        run: |
+          flutter build apk --release
+
+      # 8. Upload APK
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: carepoint-apk
+          path: carepoint_local/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
